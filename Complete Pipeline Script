@@ -1,0 +1,222 @@
+## This is the complete Pipeline script made using Bash and Shell Scripting
+
+echo "Running Pipeline Script for SRR8879057"
+
+# Quality check via FASTQC
+/home/BIB/Software/FastQC_v0.12.1/fastqc SRR8879057_1.fastq.gz SRR8879057_2.fastq.gz
+echo " QC via FASTQC is done for both reads"
+
+
+# Trimming via Trimmomatic
+nohup java -jar /home/BIB/Software/Trimmomatic-0.39/trimmomatic-0.39.jar PE \
+  SRR8879057_1.fastq.gz SRR8879057_2.fastq.gz \
+  SRR8879057_1_paired.fastq.gz SRR8879057_1_unpaired.fastq.gz \
+  SRR8879057_2_paired.fastq.gz SRR8879057_2_unpaired.fastq.gz \
+  ILLUMINACLIP:/home/BIB/Software/Trimmomatic-0.39/adapters/TruSeq3-PE.fa:2:30:10 \
+  LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36 &
+echo " Trimming is Done and Successful with outputs of both paired and unpaired for both reads "
+
+
+
+# Quality check via FASTQC of trimmed reads
+
+/home/BIB/Software/FastQC_v0.12.1/fastqc SRR8879057_1_paired.fastq.gz SRR8879057_2_paired.fastq.gz
+
+echo " QC via FASTQC is done for Trimmed reads"
+
+
+
+
+# BWA Alignment
+
+/home/BIB/Software/bwa/bwa mem -t 4 /home/BIB/Database/HumanGenome_hg38/hg38_index \
+SRR8879057_1_paired.fastq.gz SRR8879057_2_paired.fastq.gz \ > SRR8879057_aligned.sam 2> SRR8879057_bwa_alignment.log
+
+echo " BWA Alignment of both paired reads is done"
+
+
+
+# SAM to BAM
+
+samtools view -S -b SRR8879057_aligned.sam > SRR8879057_aligned.bam
+
+# [if it were not to run due to QUAL/SEQ issues then we can run this to fix the different length measures]
+
+# samtools view -H SRR8879057_aligned.sam > header.sam
+# grep -v '^@' SRR8879057_aligned.sam | \
+# awk '{ if (length($10) == length($11)) print $0; }' > cleaned_body.sam
+# cat header.sam cleaned_body.sam > SRR8879057_cleaned.sam
+# samtools view -bS SRR8879057_cleaned.sam > SRR8879057_aligned.bam
+
+echo "Convertion of SAM file to BAM file is done"
+
+
+
+# Sort the BAM File
+
+samtools sort -o SRR8879057_aligned_sorted.bam SRR8879057_aligned.bam
+
+echo "Sorting BAM file"
+
+
+
+# Indexing BAM File
+
+samtools index SRR8879057_aligned_sorted.bam
+
+echo "Indexing is Done"
+
+# Add or Read Groups
+
+/home/BIB/Software/gatk / gatk AddOrReplaceReadGroups \
+-I SRR8879057_aligned_sorted.bam \
+-O SRR8879057_rg.bam \
+-ID SRR8879057 -LB lib1 -PL ILLUMINA -PU unit1 -SM SRR8879057
+
+
+# Mark Duplicates
+
+/home/BIB/Software/gatk-4.6.2.0 / gatk MarkDuplicates \
+-I SRR8879057_rg.bam \
+-O SRR8879057_dedup.bam \
+-M SRR8879057_dedup.metrics.txt
+
+
+
+# Base Quality Recalibration
+
+/home/BIB/Software/gatk-4.6.2.0/ gatk BaseRecalibrator \
+-I SRR8879057_dedup.bam \
+-R /home/BIB/Database/HumanGenome_hg38/hg38.fa \
+--known-sites /home/BIB/Database/GATK_BQSR_KnownSite_hg38/Homo_sapiens_assembly38.dbsnp138.vcf.gz \
+--known-sites /home/BIB/Database/GATK_BQSR_KnownSite_hg38/hapmap_3.3.hg38.vcf.gz \
+--known-sites /home/BIB/Database/GATK_BQSR_KnownSite_hg38/1000G_omni2.5.hg38.vcf.gz \
+--known-sites /home/BIB/Database/GATK_BQSR_KnownSite_hg38/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz \
+-O recal_data.table
+
+
+
+
+# Apply Recalibration
+
+/home/BIB/Software/gatk-4.6.2.0/gatk HaplotypeCaller \
+-R /home/BIB/Database/HumanGenome_hg38/hg38.fa \
+-I SRR8879057_recal.bam \
+-O SRR8879057_variants.vcf.gz
+
+echo" Recalibration Applied"
+
+
+
+
+
+# Variant Calling
+
+/home/BIB/Software/gatk-4.6.2.0/HaplotypeCaller \
+-R /home/BIB/Database/HumanGenome_hg38/hg38.fa \
+-I SRR8879057_recal.bam \
+-O SRR8879057_variants.vcf.gz
+
+echo "Variant Calling started..."
+
+
+
+
+
+# Separation of SNPs and INDELs
+
+# SNPs
+
+/home/BIB/Software/gatk-4.6.2.0/gatk SelectVariants \
+-R /home/BIB/Database/HumanGenome_hg38/hg38.fa \
+-V SRR8879057_variants.vcf.gz \
+--select-type-to-include SNP \
+-O SRR8879057_variants.SNP.vcf
+
+echo " SNP Separation done"
+
+
+# INDELs
+
+/home/BIB/Software/gatk-4.6.2.0/gatk SelectVariants \
+-R /home/BIB/Database/HumanGenome_hg38/hg38.fa \
+-V SRR8879057_variants.vcf.gz \
+--select-type-to-include INDEL \
+
+echo " INDEL Separation done"
+
+
+
+
+
+# Filteration of SNPs and INDELs
+
+# SNPs
+
+/home/BIB/Software/gatk-4.6.2.0/gatk VariantFiltration \
+--variant SRR8879057_variants.SNP.vcf \
+--filter-expression "QD < 2.0" --filter-name "QD2" \
+--filter-expression "QUAL < 30.0" --filter-name "QUAL30" \
+--filter-expression "SOR > 3.0" --filter-name "SOR3" \
+--filter-expression "FS > 60.0" --filter-name "FS60" \
+--filter-expression "MQ < 40.0" --filter-name "MQ40" \
+--output SRR8879057_filtered_variants.SNP.vcf
+
+
+# INDELs
+/home/BIB/Software/gatk-4.6.2.0/gatk VariantFiltration \
+--variant SRR8879057_variants.INDEL.vcf \
+--filter-expression "QD < 2.0" --filter-name "QD2" \
+--filter-expression "QUAL < 30.0" --filter-name "QUAL30" \
+--filter-expression "FS > 200.0" --filter-name "FS200" \
+--output SRR8879057_filtered_variants.INDEL.vcf
+
+# FILTERS VALUES ARE MANIPULATED FROM DEFAULT
+
+echo " Filteration of SNPs and INDELs are done"
+
+
+
+
+# Merging Filtered VCFs
+
+/home/BIB/Software/gatk-4.6.2.0/gatk MergeVcfs \
+--INPUT SRR8879057_filtered_variants.SNP.vcf \
+--INPUT SRR8879057_filtered_variants.INDEL.vcf \
+--OUTPUT SRR8879057_filtered_variants.vcf
+
+
+
+
+# Extract Passed Variants
+
+/home/BIB/Software/bcftools/ bcftools view -f PASS SRR8879057_filtered_variants.vcf > SRR8879057_PASS.vcf
+
+echo "Passed Variants are moved to PASS output file"
+
+
+
+
+# VEP Annotation
+
+/home/BIB/Software/ensembl-vep/vep \
+-i SRR8879057_filtered_variants.vcf \
+-o SRR8879057.vep.vcf \
+--fasta /home/BIB/Database/HumanGenome_hg38/hg38.fa \
+--species homo_sapiens \
+--cache \
+--dir_cache /home/BIB/Database/ \
+--canonical \
+--vcf \
+--fork 8 \
+--merged \
+--force_overwrite \
+--assembly GRCh38 \
+--biotype \
+--exclude_predicted \
+--everything
+
+echo "VEP Annotation has been done."
+echo "Pipeline has succesfully completed and we can now analyse the results"
+echo "Thank you - Parthiv"
+
